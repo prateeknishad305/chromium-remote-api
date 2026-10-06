@@ -1,0 +1,47 @@
+:root {
+  --bg: #111;
+  --fg: #eee;
+  --muted: #9aa;
+  --line: #333;
+  --accent: #4c8dff;
+  font-family: system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  padding-bottom: 24px;
+}
+header, #bar, .tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+}
+header { border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; }
+.status { margin-left: auto; font-size: 12px; color: var(--muted); }
+#url { flex: 1; min-width: 0; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: #1c1c1c; color: var(--fg); }
+button {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.tools button { background: #2a2a2a; }
+.meta { margin: 0 10px 8px; font-size: 12px; color: var(--muted); }
+.screen-wrap { margin: 0 10px; background: #000; min-height: 200px; }
+#screen { width: 100%; display: block; cursor: crosshair; }
+.text, .help pre {
+  margin: 10px;
+  padding: 8px;
+  background: #1a1a1a;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+}
+.help h2 { margin: 16px 10px 0; font-size: 14px; }

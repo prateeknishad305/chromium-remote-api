@@ -1,0 +1,14 @@
+{
+  "name": "remote-playwright-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remote Playwright server: browse pages for clients that cannot run Chromium on phone",
+  "main": "server/pw.js",
+  "scripts": {
+    "start": "NODE_PATH=/usr/local/lib/node_modules node server/pw.js",
+    "dev": "NODE_PATH=/usr/local/lib/node_modules node server/pw.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

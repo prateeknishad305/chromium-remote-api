@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Remote Playwright</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">Remote PW</div>
+    <div class="status" id="health">connecting</div>
+  </header>
+  <form id="bar" action="#">
+    <input id="url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com" value="https://example.com" />
+    <button type="submit" id="go">Go</button>
+  </form>
+  <div class="tools">
+    <button type="button" id="back">Back</button>
+    <button type="button" id="reload">Reload</button>
+    <button type="button" id="scroll">Scroll</button>
+    <button type="button" id="frames">Frames</button>
+    <button type="button" id="shot">Shot</button>
+    <button type="button" id="close">Close</button>
+  </div>
+  <p class="meta" id="meta">Server Chromium surfs the page. Phone only calls the API.</p>
+  <div class="screen-wrap">
+    <img id="screen" alt="page screenshot" />
+  </div>
+  <pre id="text" class="text"></pre>
+  <section class="help">
+    <h2>API (no local Chromium)</h2>
+    <pre id="apiHint"></pre>
+  </section>
+  <script src="/app.js"></script>
+</body>
+</html>
