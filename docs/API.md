@@ -41,9 +41,27 @@ Shared body fields (click, type, press, select, wait-for-selector, inspect, uplo
 - `GET /api/v1/sessions`
 - `POST /api/v1/sessions/:id/upload` `{ "selector": "input[type=file]", "files": [{ "name": "a.png", "mimeType": "image/png", "bufferBase64": "..." }] }`
 
+## User-Agent / device
+`GET /api/v1/ua` — presets list.
+
+`POST /api/v1/sessions` / `POST /api/v1/browse`:
+
+```json
+{ "device": "desktop", "url": "https://example.com" }
+```
+
+| device | UA |
+|--------|----|
+| `mobile` / `mobile-ios` | iPhone Safari |
+| `mobile-android` | Pixel Chrome Mobile |
+| `desktop` | Windows Chrome |
+| `desktop-mac` | macOS Chrome |
+
+Custom: `{ "userAgent": "Mozilla/5.0 ...", "width": 1280, "height": 720 }`.
+
 ## Session / browse
-- `POST /api/v1/browse` `{ "url": "https://example.com" }`
-- `POST /api/v1/sessions` `{ "width": 390, "height": 844 }`
+- `POST /api/v1/browse` `{ "url": "https://example.com", "device": "desktop" }`
+- `POST /api/v1/sessions` `{ "device": "mobile" }`
 - `POST /api/v1/sessions/:id/goto`
 - `POST /api/v1/sessions/:id/back`
 - `POST /api/v1/sessions/:id/reload`

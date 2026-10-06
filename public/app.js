@@ -1,6 +1,12 @@
 const $ = (id) => document.getElementById(id);
 let sessionId = null;
-let viewport = { width: 390, height: 844 };
+const VIEWPORTS = {
+  mobile: { width: 390, height: 844 },
+  "mobile-android": { width: 412, height: 915 },
+  desktop: { width: 1366, height: 768 },
+  "desktop-mac": { width: 1440, height: 900 },
+};
+let viewport = VIEWPORTS.mobile;
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -28,15 +34,28 @@ async function health() {
 }
 
 async function ensureSession() {
+  const device = $("device").value || "mobile";
+  viewport = VIEWPORTS[device] || VIEWPORTS.mobile;
   if (sessionId) return sessionId;
   const s = await api("/api/v1/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ width: viewport.width, height: viewport.height }),
+    body: JSON.stringify({
+      device,
+      width: viewport.width,
+      height: viewport.height,
+    }),
   });
   sessionId = s.id;
   return sessionId;
 }
+
+$("device").addEventListener("change", async () => {
+  if (sessionId) {
+    await api(`/api/v1/sessions/${sessionId}`, { method: "DELETE" }).catch(() => {});
+    sessionId = null;
+  }
+});
 
 $("bar").addEventListener("submit", async (e) => {
   e.preventDefault();

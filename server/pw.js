@@ -4,6 +4,7 @@ const path = require("path");
 const { chromium } = require("playwright");
 const { randomUUID } = require("crypto");
 const { timeoutOf, listFrames, resolveScope, waitLocator } = require("./frames");
+const { resolveDevice, listPresets } = require("./ua");
 
 const PORT = Number(process.env.PORT) || 5173;
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS) || 5;
@@ -48,6 +49,9 @@ function dto(session) {
     createdAt: session.createdAt,
     lastUsed: new Date(session.lastUsed).toISOString(),
     viewport: session.viewport,
+    device: session.device,
+    userAgent: session.userAgent,
+    isMobile: session.isMobile,
   };
 }
 
@@ -70,15 +74,13 @@ async function createSession(opts = {}) {
     if (oldest) await closeSession(oldest.id);
   }
   const b = await getBrowser();
-  const viewport = {
-    width: Number(opts.width) || 390,
-    height: Number(opts.height) || 844,
-  };
+  const profile = resolveDevice(opts);
+  const viewport = profile.viewport;
   const context = await b.newContext({
     viewport,
-    userAgent:
-      opts.userAgent ||
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    userAgent: profile.userAgent,
+    isMobile: profile.isMobile,
+    hasTouch: profile.hasTouch,
     javaScriptEnabled: true,
   });
   const page = await context.newPage();
@@ -106,6 +108,9 @@ async function createSession(opts = {}) {
     context,
     page,
     viewport,
+    device: profile.device,
+    userAgent: profile.userAgent,
+    isMobile: profile.isMobile,
     url: "about:blank",
     title: "",
     createdAt: new Date().toISOString(),
@@ -141,6 +146,10 @@ setInterval(() => {
   }
 }, 30000);
 
+app.get("/api/v1/ua", (req, res) => {
+  res.json({ presets: listPresets() });
+});
+
 app.get("/api/v1/health", async (req, res) => {
   try {
     await getBrowser();
@@ -152,7 +161,7 @@ app.get("/api/v1/health", async (req, res) => {
       maxSessions: MAX_SESSIONS,
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(200).json({ ok: false, error: err.message });
   }
 });
 
@@ -161,7 +170,7 @@ app.post("/api/v1/sessions", async (req, res) => {
     const session = await createSession(req.body || {});
     res.status(201).json(dto(session));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -195,14 +204,47 @@ app.post("/api/v1/sessions/:id/goto", async (req, res) => {
       status: nav ? nav.status() : 0,
     });
   } catch (err) {
-    res.status(502).json({ error: err.message, url: session.page.url() });
+    actionFail(res, err, { url: session.page.url() });
   }
 });
 
-async function afterAction(session) {
-  await session.page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
-  await session.page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
-  return snapshot(session);
+function actionFail(res, err, extra = {}) {
+  res.status(200).json({
+    ok: false,
+    error: err && err.message ? err.message : String(err),
+    ...extra,
+  });
+}
+
+async function afterAction(session, opts = {}) {
+  await session.page.waitForTimeout(Math.min(Number(opts.settleMs) || 250, 2000)).catch(() => {});
+  if (opts.screenshot === false) {
+    session.url = session.page.url();
+    session.title = await session.page.title().catch(() => "");
+    return { ...dto(session), ok: true, screenshotBase64: null, text: "" };
+  }
+  try {
+    return { ok: true, ...(await snapshot(session)) };
+  } catch (err) {
+    session.url = session.page.url();
+    return { ok: true, ...dto(session), screenshotError: err.message, text: "", screenshotBase64: null };
+  }
+}
+
+async function clickLocator(loc, timeout) {
+  const t = Math.min(timeout || 8000, 12000);
+  try {
+    await loc.click({ timeout: t });
+    return "click";
+  } catch {
+    try {
+      await loc.click({ timeout: Math.min(t, 5000), force: true });
+      return "force";
+    } catch {
+      await loc.evaluate((el) => el.click());
+      return "js";
+    }
+  }
 }
 
 app.post("/api/v1/sessions/:id/wait-for-selector", async (req, res) => {
@@ -218,7 +260,7 @@ app.post("/api/v1/sessions/:id/wait-for-selector", async (req, res) => {
     await waitLocator(scope, selector, timeout, state);
     res.json({ ok: true, selector, state, timeout, frames: listFrames(session.page) });
   } catch (err) {
-    res.status(504).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -235,7 +277,7 @@ app.get("/api/v1/sessions/:id/screenshot", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.send(png);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -276,7 +318,7 @@ app.post("/api/v1/sessions/:id/evaluate", async (req, res) => {
     const result = await target.evaluate(script);
     res.json({ ok: true, result });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -285,20 +327,22 @@ app.post("/api/v1/sessions/:id/click", async (req, res) => {
   if (!session) return;
   const body = req.body || {};
   const { selector, x, y } = body;
-  const timeout = timeoutOf(body, 15000);
+  const timeout = timeoutOf(body, 8000);
   try {
+    let how = "mouse";
     if (selector) {
       const scope = await resolveScope(session.page, body);
       const loc = await waitLocator(scope, selector, timeout, body.state || "visible");
-      await loc.click({ timeout });
-    } else if (Number.isFinite(x) && Number.isFinite(y)) {
-      await session.page.mouse.click(x, y);
+      how = await clickLocator(loc, timeout);
+    } else if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
+      await session.page.mouse.click(Number(x), Number(y));
     } else {
       return res.status(400).json({ error: "selector or x,y required" });
     }
-    res.json(await afterAction(session));
+    const shot = await afterAction(session, { screenshot: body.screenshot !== false, settleMs: body.settleMs });
+    res.json({ ...shot, click: how });
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -317,9 +361,9 @@ app.post("/api/v1/sessions/:id/type", async (req, res) => {
     } else {
       await session.page.keyboard.type(text);
     }
-    res.json(await snapshot(session));
+    res.json(await afterAction(session, { screenshot: body.screenshot !== false }));
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -338,9 +382,9 @@ app.post("/api/v1/sessions/:id/press", async (req, res) => {
     } else {
       await session.page.keyboard.press(key);
     }
-    res.json(await afterAction(session));
+    res.json(await afterAction(session, { screenshot: body.screenshot !== false }));
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -360,10 +404,10 @@ app.post("/api/v1/sessions/:id/select", async (req, res) => {
     else if (body.index != null) selected = await loc.selectOption({ index: Number(body.index) }, { timeout });
     else if (values != null) selected = await loc.selectOption(values, { timeout });
     else return res.status(400).json({ error: "value, label, or index required" });
-    const shot = await afterAction(session);
+    const shot = await afterAction(session, { screenshot: body.screenshot !== false });
     res.json({ ...shot, selected });
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -381,9 +425,9 @@ app.post("/api/v1/sessions/:id/scroll", async (req, res) => {
     } else {
       await session.page.mouse.wheel(dx, dy);
     }
-    res.json(await snapshot(session));
+    res.json(await afterAction(session, { screenshot: body.screenshot !== false }));
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -394,9 +438,9 @@ app.post("/api/v1/sessions/:id/wait-for-load", async (req, res) => {
   const timeout = timeoutOf(req.body, 15000);
   try {
     await session.page.waitForLoadState(state, { timeout });
-    res.json(await snapshot(session));
+    res.json(await afterAction(session));
   } catch (err) {
-    res.status(504).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -414,7 +458,7 @@ app.get("/api/v1/sessions/:id/html", async (req, res) => {
     }
     res.json({ url: session.page.url(), html: html.slice(0, 400000), frames: listFrames(session.page) });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -440,7 +484,7 @@ app.post("/api/v1/sessions/:id/inspect", async (req, res) => {
     }));
     res.json({ ok: true, selector, ...info });
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -469,9 +513,9 @@ app.post("/api/v1/sessions/:id/upload", async (req, res) => {
     const scope = await resolveScope(session.page, body);
     const loc = await waitLocator(scope, selector, timeoutOf(body, 15000), "attached");
     await loc.setInputFiles(payloads);
-    res.json(await snapshot(session));
+    res.json(await afterAction(session, { screenshot: body.screenshot !== false }));
   } catch (err) {
-    res.status(502).json({ error: err.message, frames: listFrames(session.page) });
+    actionFail(res, err, { frames: listFrames(session.page) });
   }
 });
 
@@ -480,9 +524,9 @@ app.post("/api/v1/sessions/:id/back", async (req, res) => {
   if (!session) return;
   try {
     await session.page.goBack({ waitUntil: "domcontentloaded", timeout: GOTO_MS }).catch(() => {});
-    res.json(await snapshot(session));
+    res.json(await afterAction(session));
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -491,9 +535,9 @@ app.post("/api/v1/sessions/:id/reload", async (req, res) => {
   if (!session) return;
   try {
     await session.page.reload({ waitUntil: "domcontentloaded", timeout: GOTO_MS });
-    res.json(await snapshot(session));
+    res.json(await afterAction(session));
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -502,10 +546,10 @@ app.get("/api/v1/sessions/:id/page", async (req, res) => {
   if (!session) return;
   try {
     const html = await session.page.content();
-    const shot = await snapshot(session);
+    const shot = await afterAction(session);
     res.json({ ...shot, html: html.slice(0, 200000) });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -519,7 +563,7 @@ app.get("/api/v1/sessions/:id/screenshot.png", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.send(png);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -533,13 +577,14 @@ app.post("/api/v1/browse", async (req, res) => {
     await session.page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
     const shot = await snapshot(session);
     res.json({
+      ok: true,
       sessionId: session.id,
       status: nav ? nav.status() : 0,
       ...shot,
     });
   } catch (err) {
     if (session) await closeSession(session.id);
-    res.status(502).json({ error: err.message });
+    actionFail(res, err);
   }
 });
 
@@ -547,6 +592,11 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 app.use((req, res) => {
   if (req.path.startsWith("/api/")) return res.status(404).json({ error: "not found" });
   res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+});
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  res.status(200).json({ ok: false, error: err && err.message ? err.message : "error" });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
